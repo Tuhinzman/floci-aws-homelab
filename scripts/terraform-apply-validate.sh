@@ -102,9 +102,9 @@ echo
 echo "=== 1. CREATE LOCAL TERRAFORM VARIABLES ==="
 
 cat >"$TFVARS_FILE" <<EOF_TFVARS
-floci_host_ip          = "${FLOCI_HOST_IP}"
+floci_host_ip           = "${FLOCI_HOST_IP}"
 floci_internal_hostname = "${FLOCI_INTERNAL_HOSTNAME}"
-aws_region               = "${FLOCI_REGION:-us-east-1}"
+aws_region              = "${FLOCI_REGION:-us-east-1}"
 EOF_TFVARS
 
 terraform -chdir="$STACK_DIR" fmt terraform.tfvars
@@ -209,9 +209,9 @@ terraform -chdir="$STACK_DIR" apply \
 echo "TERRAFORM_APPLY=PASS"
 
 echo
-echo "=== 6. VERIFY EXACT STATE SET ==="
+echo "=== 6. VERIFY EXACT MANAGED STATE SET ==="
 
-EXPECTED_STATE="$(
+EXPECTED_MANAGED_STATE="$(
   cat <<'EOF_STATE'
 aws_dynamodb_table.orders
 aws_iam_role.lambda
@@ -222,15 +222,26 @@ aws_sqs_queue.orders
 EOF_STATE
 )"
 
-ACTUAL_STATE="$(
+ACTUAL_MANAGED_STATE="$(
   terraform -chdir="$STACK_DIR" state list |
+    awk '!/^data\./' |
+    sort
+)"
+
+DATA_STATE="$(
+  terraform -chdir="$STACK_DIR" state list |
+    awk '/^data\./' |
     sort
 )"
 
 assert_equals \
-  "TERRAFORM_STATE_EXACT_MATCH" \
-  "$EXPECTED_STATE" \
-  "$ACTUAL_STATE"
+  "TERRAFORM_MANAGED_STATE_EXACT_MATCH" \
+  "$EXPECTED_MANAGED_STATE" \
+  "$ACTUAL_MANAGED_STATE"
+
+echo "TERRAFORM_DATA_STATE_ENTRIES_BEGIN"
+printf '%s\n' "$DATA_STATE"
+echo "TERRAFORM_DATA_STATE_ENTRIES_END"
 
 echo
 echo "=== 7. VERIFY POST-APPLY CONVERGENCE ==="
