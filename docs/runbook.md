@@ -2,7 +2,7 @@
 
 This runbook is for building, operating, and checking a small local AWS learning environment with Floci. It is written for someone who wants to practice Cloud DevOps or Platform Engineering workflows without leaving billable AWS resources running while they learn.
 
-The commands are intentionally simple. The goal is to make the lab easy to rebuild and easy to troubleshoot, not to hide the moving parts behind a large automation framework.
+The commands are intentionally simple. The goal is to make the lab easy to rebuild and troubleshoot, not to hide the moving parts behind a large automation framework.
 
 ## 1. Before you start
 
@@ -14,9 +14,9 @@ You need:
 - Internet access for package and image downloads
 - Git
 
-A practical starting VM size is 6 vCPU, 16 GiB RAM, and an 80 GiB disk. You can use less for basic S3, SQS, DynamoDB, SSM, and Secrets Manager practice.
+A practical starting VM size is 6 vCPU, 16 GiB RAM, and an 80 GiB disk. You can use less for basic S3, SQS, DynamoDB, SSM, and Secrets Manager practice. Docker-backed Lambda execution needs enough disk for the runtime image and enough memory for both Floci and the spawned function container.
 
-If the VM is hosted on thin-provisioned storage, check the physical storage pool before assigning a large virtual disk. A large logical disk does not mean that space is reserved physically, and an overcommitted thin pool can still fill up later.
+If the VM is hosted on thin-provisioned storage, check the physical storage pool before assigning a large virtual disk. A large logical disk does not mean that space is reserved physically, and an overcommitted thin pool can still fill later.
 
 ## 2. Prepare the VM
 
@@ -79,9 +79,12 @@ Edit `.env` and set the private IP of the Floci VM:
 
 ```text
 FLOCI_HOST_IP=192.168.1.50
+FLOCI_INTERNAL_HOSTNAME=floci
 FLOCI_VERSION=1.7.0
 FLOCI_REGION=us-east-1
 ```
+
+`FLOCI_HOST_IP` is the address your workstation and `aws-floci` use. `FLOCI_INTERNAL_HOSTNAME` is the Docker-network name used by spawned service containers such as Lambda runtimes. Keep the default value `floci` unless you deliberately change the Compose service name.
 
 The `.env` file is ignored by Git because addresses and local settings vary between labs.
 
@@ -171,12 +174,18 @@ The test exercises:
 A successful run ends with:
 
 ```text
+STS_TEST=PASS
+S3_TEST=PASS
+SQS_TEST=PASS
+DYNAMODB_TEST=PASS
+SSM_TEST=PASS
+SECRETS_MANAGER_TEST=PASS
 FLOCI_CORE_AWS_SMOKE_TEST=PASS
 ```
 
 These resources are deliberately left in place so the persistence test can verify them after a restart.
 
-## 9. Validate persistence
+## 9. Validate core-service persistence
 
 Run the persistence test from any directory. It resolves the repository path from the script location and reads the same `.env` and Compose file used during deployment.
 
@@ -197,7 +206,56 @@ SECRETS_MANAGER_PERSISTENCE=PASS
 FLOCI_PERSISTENCE_VALIDATION=PASS
 ```
 
-## 10. Normal operations
+After `FLOCI_INTERNAL_HOSTNAME=floci` is enabled, Floci may return an SQS URL beginning with `http://floci:4566`. That is expected for resources intended to be reachable by Docker-spawned service containers. The persistence script validates this internal URL explicitly.
+
+## 10. Validate Docker-backed Lambda
+
+Run:
+
+```bash
+bash scripts/smoke-test-lambda.sh
+```
+
+The script performs the following workflow:
+
+1. packages a small Python function into a ZIP file
+2. creates or reads back a local IAM execution role
+3. creates a Python 3.13 Lambda function
+4. invokes the function synchronously with a JSON event
+5. verifies status code `200`
+6. verifies the exact response and input-event round trip
+7. verifies that a real Lambda runtime container is running
+8. verifies that the runtime container is attached to `floci_default`
+9. reads the function configuration back through the Lambda API
+
+The first run may pull:
+
+```text
+public.ecr.aws/lambda/python:3.13
+```
+
+A successful run ends with:
+
+```text
+FUNCTION_PACKAGE=PASS
+IAM_ROLE_TEST=PASS
+LAMBDA_CREATE_TEST=PASS
+LAMBDA_RESPONSE_ASSERTION=PASS
+LAMBDA_INVOKE_TEST=PASS
+LAMBDA_DOCKER_CONTAINER_TEST=PASS
+FLOCI_LAMBDA_SMOKE_TEST=PASS
+```
+
+The script intentionally leaves the test function and role present for inspection. This test proves synchronous Python 3.13 execution through a real Docker runtime. It does not yet prove Lambda persistence across a Floci restart, event-source mappings, concurrency, layers, VPC behavior, or AWS IAM parity.
+
+To remove the Lambda test resources later:
+
+```bash
+aws-floci lambda delete-function --function-name floci-hello
+aws-floci iam delete-role --role-name floci-lambda-role
+```
+
+## 11. Normal operations
 
 Run these commands from the repository root.
 
@@ -222,6 +280,13 @@ curl -fsS "http://${FLOCI_HOST_IP}:4566/_localstack/health"
 sudo docker compose --env-file .env -f compose/compose.yaml logs --tail=100 floci
 ```
 
+### List Floci and spawned containers
+
+```bash
+sudo docker ps \
+  --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Networks}}'
+```
+
 ### Restart Floci
 
 ```bash
@@ -242,9 +307,9 @@ sudo docker compose --env-file .env -f compose/compose.yaml start
 
 Do not use `docker compose down -v` unless you intentionally want to remove the persistent volume and its data.
 
-## 11. Storage checks
+## 12. Storage checks
 
-Floci itself is small, but container-backed services can consume disk quickly.
+Floci itself is small, but Docker-backed services can consume disk quickly.
 
 Inside the VM:
 
@@ -254,22 +319,29 @@ sudo docker system df
 sudo docker volume ls
 ```
 
+Lambda runtime images remain in the local Docker image cache after the test. Do not run broad image-pruning commands without checking what other lab workloads use those images.
+
 On a Proxmox host using LVM-thin, also watch the thin-pool data percentage. Logical VM disk sizes can exceed the physical pool because of thin provisioning, but the pool must never be allowed to fill physically.
 
-## 12. Network stability
+## 13. Network stability
 
-The Floci address is included in returned service URLs, such as SQS queue URLs. That means the VM address should stay stable.
+The Floci VM address should remain stable because the workstation wrapper uses it. For a home lab, reserve the VM address in your router or DHCP server rather than guessing an unused static IP in the guest.
 
-For a home lab, reserve the VM address in your router or DHCP server rather than guessing an unused static IP in the guest.
+There are two address contexts:
 
-If the address changes:
+```text
+Workstation or VM shell → http://<FLOCI_HOST_IP>:4566
+Spawned Docker service → http://floci:4566
+```
+
+If the VM address changes:
 
 1. update `.env`
 2. re-run `scripts/configure-floci-cli.sh`
 3. recreate the Floci container with `docker compose up -d`
-4. repeat the smoke and persistence tests
+4. repeat the core, persistence, and Lambda tests
 
-## 13. Adding more AWS services
+## 14. Adding more AWS services
 
 Floci exposes many AWS-compatible service APIs, but do not assume a service is fully validated because it appears as `running` in the health response.
 
@@ -279,14 +351,25 @@ Add services one workflow at a time:
 create resource
 → use the resource
 → read the result back
+→ inspect the underlying container when applicable
 → restart Floci if persistence matters
 → verify again
 → document only what was proven
 ```
 
-Container-backed services such as Lambda, databases, Kubernetes, Kafka, or OpenSearch may create additional Docker containers and need more ports, memory, and storage than the core services tested here.
+The next planned workflow is:
 
-## 14. Security notes
+```text
+SQS message
+→ Lambda event-source mapping
+→ Lambda execution
+→ DynamoDB write
+→ DynamoDB read-back assertion
+```
+
+Databases, Kubernetes, Kafka, and OpenSearch may create additional containers and need more ports, memory, and storage than the services tested here.
+
+## 15. Security notes
 
 This is a learning lab, not a public cloud endpoint.
 
@@ -297,10 +380,17 @@ Keep these rules:
 - do not expose TCP 4566 to the public Internet
 - do not expose `/var/run/docker.sock` over the network
 - keep `.env` out of Git
-- sanitize private IPs, MAC addresses, SSH keys, machine IDs, and real secrets before publishing evidence
+- sanitize private IPs, MAC addresses, SSH keys, machine IDs, container IDs, and real secrets before publishing evidence
 
-## 15. Validation boundary
+## 16. Validation boundary
 
-This runbook proves the workflows documented in this repository. It does not prove exact parity with AWS for IAM enforcement, VPC networking, managed EKS, availability, scaling, quotas, Multi-AZ behavior, pricing, or unsupported API operations.
+This runbook currently proves:
+
+- the documented core API workflows
+- persistence of the documented core resources across a Floci restart
+- an isolated AWS CLI path using dummy credentials
+- a Python 3.13 Lambda package, deployment, synchronous invocation, response assertion, Docker runtime, and Docker network attachment
+
+It does not prove exact parity with AWS for IAM enforcement, VPC networking, managed EKS, availability, scaling, quotas, Multi-AZ behavior, pricing, Lambda event sources, or unsupported API operations.
 
 Use Floci to learn cheaply and iterate quickly. Use real AWS when the behavior you need to prove depends on AWS itself.
