@@ -10,7 +10,7 @@ Bare-metal server
         │   ├── Floci 1.7.0
         │   │   ├── persistent data volume
         │   │   ├── AWS-compatible API on TCP 4566
-        │   │   └── SQS event-source mappings
+        │   │   └── persistent SQS event-source mappings
         │   └── Python 3.13 Lambda runtime containers
         │       └── floci_default network
         └── AWS CLI v2
@@ -71,7 +71,9 @@ Floci container
     └── floci_floci-data
 ```
 
-The tested S3, SQS, DynamoDB, SSM Parameter Store, and Secrets Manager resources survived a Floci container restart.
+The tested S3, SQS, DynamoDB, SSM Parameter Store, Secrets Manager, Lambda function, and event-source mapping survived a Floci container restart.
+
+The restart test also confirmed that the event-source mapping kept the same UUID and remained enabled. A new message sent after restart triggered a new Lambda execution and produced a new asserted DynamoDB item.
 
 The Docker socket is mounted into Floci so container-backed services can start local runtimes. The Lambda tests used that socket to run the Python 3.13 Lambda image. Docker-socket access should be treated as privileged access to the VM.
 
@@ -110,6 +112,27 @@ The function writes the following fields:
 
 The test asserted every field. It did not merely check that the table contained an item.
 
+## Validated event-driven restart path
+
+```text
+read queue, table, function, and mapping
+→ restart Floci
+→ read back the same resource identities and states
+→ send a new SQS message
+→ run a new Lambda container
+→ write and assert a new DynamoDB item
+```
+
+The restart validation confirmed:
+
+- the same queue URL and ARN
+- the DynamoDB table still `ACTIVE`
+- the Lambda function still `Active`
+- the same event-source mapping UUID
+- the mapping still `Enabled`
+- a new post-restart Docker-backed Lambda execution
+- a new DynamoDB item with exact field assertions
+
 ## Verified boundary
 
 The repository currently verifies:
@@ -126,14 +149,16 @@ The repository currently verifies:
 - SQS event-source mapping creation and `Enabled` state
 - asynchronous SQS-triggered Lambda execution
 - Lambda-to-DynamoDB write and exact read-back
+- persistence of the queue, table, Lambda function, and mapping across a Floci restart
+- preservation of the same mapping UUID and enabled state
+- successful event processing after restart
 
 It does not yet verify:
 
-- persistence of the Lambda function or event-source mapping after a Floci restart
-- processing after a full VM reboot
+- persistence after a full Ubuntu VM or Proxmox host reboot
 - retry or dead-letter queue behavior
 - partial batch failure handling
 - exactly-once delivery
 - production scaling, availability, or AWS IAM parity
 
-A separate script is included to test the complete event-driven path after restarting Floci. That result should only be added to the verified boundary after the script passes on the lab.
+The next high-value architecture change is to provision the tested event-driven stack with Terraform or OpenTofu rather than creating it only through imperative AWS CLI scripts.
