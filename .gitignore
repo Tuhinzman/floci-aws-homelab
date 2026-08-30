@@ -3,3 +3,17 @@
 .DS_Store
 .aws/
 evidence/raw/
+
+# Terraform local state, plans, caches, and generated artifacts
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.json
+terraform.tfvars
+*.auto.tfvars
+*.auto.tfvars.json
+crash.log
+crash.*.log
+terraform/event-driven/build/*.zip
+terraform/event-driven/terraform-convergence.log
