@@ -75,7 +75,7 @@ echo "============================================================"
 echo
 echo "=== 1. VERIFY TERRAFORM-MANAGED STATE ==="
 
-EXPECTED_STATE="$(
+EXPECTED_MANAGED_STATE="$(
   cat <<'EOF_STATE'
 aws_dynamodb_table.orders
 aws_iam_role.lambda
@@ -86,21 +86,31 @@ aws_sqs_queue.orders
 EOF_STATE
 )"
 
-ACTUAL_STATE="$(
+ACTUAL_MANAGED_STATE="$(
   terraform -chdir="$STACK_DIR" state list |
+    awk '!/^data\./' |
     sort
 )"
 
-if [ "$ACTUAL_STATE" != "$EXPECTED_STATE" ]; then
-  echo "Terraform state does not contain the expected six resources."
-  echo "Expected:"
-  printf '%s\n' "$EXPECTED_STATE"
-  echo "Actual:"
-  printf '%s\n' "$ACTUAL_STATE"
+DATA_STATE_BEFORE_DESTROY="$(
+  terraform -chdir="$STACK_DIR" state list |
+    awk '/^data\./' |
+    sort
+)"
+
+if [ "$ACTUAL_MANAGED_STATE" != "$EXPECTED_MANAGED_STATE" ]; then
+  echo "Terraform managed state does not contain the expected six resources."
+  echo "Expected managed resources:"
+  printf '%s\n' "$EXPECTED_MANAGED_STATE"
+  echo "Actual managed resources:"
+  printf '%s\n' "$ACTUAL_MANAGED_STATE"
   exit 1
 fi
 
-echo "TERRAFORM_STATE_PRE_DESTROY=PASS"
+echo "TERRAFORM_MANAGED_STATE_PRE_DESTROY=PASS"
+echo "TERRAFORM_DATA_STATE_BEFORE_DESTROY_BEGIN"
+printf '%s\n' "$DATA_STATE_BEFORE_DESTROY"
+echo "TERRAFORM_DATA_STATE_BEFORE_DESTROY_END"
 
 QUEUE_NAME="$(terraform -chdir="$STACK_DIR" output -raw queue_name)"
 TABLE_NAME="$(terraform -chdir="$STACK_DIR" output -raw dynamodb_table_name)"
@@ -183,19 +193,29 @@ terraform -chdir="$STACK_DIR" apply \
 echo "TERRAFORM_DESTROY=PASS"
 
 echo
-echo "=== 4. VERIFY EMPTY TERRAFORM STATE ==="
+echo "=== 4. VERIFY NO MANAGED RESOURCES REMAIN IN STATE ==="
 
-REMAINING_STATE="$(
-  terraform -chdir="$STACK_DIR" state list
+REMAINING_MANAGED_STATE="$(
+  terraform -chdir="$STACK_DIR" state list |
+    awk '!/^data\./'
 )"
 
-if [ -n "$REMAINING_STATE" ]; then
-  echo "Terraform state is not empty:"
-  printf '%s\n' "$REMAINING_STATE"
+DATA_STATE_AFTER_DESTROY="$(
+  terraform -chdir="$STACK_DIR" state list |
+    awk '/^data\./' |
+    sort
+)"
+
+if [ -n "$REMAINING_MANAGED_STATE" ]; then
+  echo "Terraform managed state is not empty:"
+  printf '%s\n' "$REMAINING_MANAGED_STATE"
   exit 1
 fi
 
-echo "TERRAFORM_STATE_EMPTY=PASS"
+echo "TERRAFORM_MANAGED_STATE_EMPTY=PASS"
+echo "TERRAFORM_DATA_STATE_AFTER_DESTROY_BEGIN"
+printf '%s\n' "$DATA_STATE_AFTER_DESTROY"
+echo "TERRAFORM_DATA_STATE_AFTER_DESTROY_END"
 
 echo
 echo "=== 5. VERIFY API RESOURCES ARE ABSENT ==="
