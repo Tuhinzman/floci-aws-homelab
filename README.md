@@ -98,6 +98,7 @@ SQS message
 │   ├── smoke-test-core-services.sh
 │   ├── smoke-test-lambda.sh
 │   ├── smoke-test-sqs-lambda-dynamodb.sh
+│   ├── validate-event-driven-persistence.sh
 │   └── validate-persistence.sh
 ├── .env.example
 ├── .gitignore
@@ -217,6 +218,16 @@ bash scripts/smoke-test-sqs-lambda-dynamodb.sh
 ```
 
 This sends a unique SQS message, waits for Lambda to process it, and asserts the resulting DynamoDB item.
+
+### 11. Test the event path after restarting Floci
+
+Run this only after the event-driven smoke test has created its resources:
+
+```bash
+bash scripts/validate-event-driven-persistence.sh
+```
+
+The script is included and CI-checked. Its restart result remains outside the verified claim boundary until it passes on the lab.
 
 ## Safety model
 
