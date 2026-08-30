@@ -22,6 +22,7 @@ set +a
 
 : "${FLOCI_HOST_IP:?FLOCI_HOST_IP is required in .env}"
 
+FLOCI_INTERNAL_HOSTNAME="${FLOCI_INTERNAL_HOSTNAME:-floci}"
 BUCKET="${FLOCI_TEST_BUCKET:-floci-test-bucket}"
 QUEUE="${FLOCI_TEST_QUEUE:-floci-test-orders}"
 TABLE="${FLOCI_TEST_TABLE:-FlociTestUsers}"
@@ -33,6 +34,21 @@ compose() {
     --env-file "$ENV_FILE" \
     -f "$COMPOSE_FILE" \
     "$@"
+}
+
+assert_equals() {
+  local label="$1"
+  local expected="$2"
+  local actual="$3"
+
+  if [ "$actual" != "$expected" ]; then
+    echo "${label}=FAIL" >&2
+    echo "Expected: ${expected}" >&2
+    echo "Actual:   ${actual}" >&2
+    exit 1
+  fi
+
+  echo "${label}=PASS"
 }
 
 echo "Restarting Floci..."
@@ -56,22 +72,25 @@ if [ "$HEALTH" != "healthy" ]; then
   exit 1
 fi
 
+echo "Reading persisted resources..."
+
 S3_OBJECT="$(aws-floci s3 cp "s3://${BUCKET}/hello.txt" -)"
 QUEUE_URL="$(aws-floci sqs get-queue-url --queue-name "$QUEUE" --query QueueUrl --output text)"
 DDB_NAME="$(aws-floci dynamodb get-item --table-name "$TABLE" --key '{"id":{"S":"user-001"}}' --query 'Item.name.S' --output text)"
 SSM_VALUE="$(aws-floci ssm get-parameter --name "$PARAM" --query 'Parameter.Value' --output text)"
 SECRET_NAME="$(aws-floci secretsmanager describe-secret --secret-id "$SECRET" --query Name --output text)"
-EXPECTED_QUEUE_URL="http://${FLOCI_HOST_IP}:4566/000000000000/${QUEUE}"
+EXPECTED_QUEUE_URL="http://${FLOCI_INTERNAL_HOSTNAME}:4566/000000000000/${QUEUE}"
 
-[ "$S3_OBJECT" = "hello from floci" ]
-[ "$QUEUE_URL" = "$EXPECTED_QUEUE_URL" ]
-[ "$DDB_NAME" = "Tuhin" ]
-[ "$SSM_VALUE" = "development" ]
-[ "$SECRET_NAME" = "$SECRET" ]
+echo "S3_OBJECT=${S3_OBJECT}"
+echo "QUEUE_URL=${QUEUE_URL}"
+echo "DYNAMODB_NAME=${DDB_NAME}"
+echo "SSM_VALUE=${SSM_VALUE}"
+echo "SECRET_NAME=${SECRET_NAME}"
 
-echo "S3_PERSISTENCE=PASS"
-echo "SQS_PERSISTENCE=PASS"
-echo "DYNAMODB_PERSISTENCE=PASS"
-echo "SSM_PERSISTENCE=PASS"
-echo "SECRETS_MANAGER_PERSISTENCE=PASS"
+assert_equals "S3_PERSISTENCE" "hello from floci" "$S3_OBJECT"
+assert_equals "SQS_PERSISTENCE" "$EXPECTED_QUEUE_URL" "$QUEUE_URL"
+assert_equals "DYNAMODB_PERSISTENCE" "Tuhin" "$DDB_NAME"
+assert_equals "SSM_PERSISTENCE" "development" "$SSM_VALUE"
+assert_equals "SECRETS_MANAGER_PERSISTENCE" "$SECRET" "$SECRET_NAME"
+
 echo "FLOCI_PERSISTENCE_VALIDATION=PASS"
