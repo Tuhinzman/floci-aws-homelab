@@ -1,0 +1,77 @@
+name: Repository validation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-validation:
+    name: Shell and Compose validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Validate Bash syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t scripts < <(
+            find scripts -type f -name '*.sh' -print | sort
+          )
+
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "No shell scripts were found."
+            exit 1
+          fi
+
+          printf 'Checking %s\n' "${scripts[@]}"
+
+          for script in "${scripts[@]}"; do
+            bash -n "$script"
+          done
+
+      - name: Run ShellCheck
+        run: shellcheck --external-sources --severity=warning scripts/*.sh
+
+      - name: Validate Docker Compose configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          docker compose \
+            --env-file .env \
+            -f compose/compose.yaml \
+            config --quiet
+
+      - name: Check repository safety files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "The local .env file must not be committed."
+            exit 1
+          fi
+
+          git check-ignore .env
+          test -f .env.example
+          test -f .gitignore
