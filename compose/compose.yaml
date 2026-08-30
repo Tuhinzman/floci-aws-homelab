@@ -1,3 +1,5 @@
+name: floci
+
 services:
   floci:
     image: floci/floci:${FLOCI_VERSION:-1.7.0}
