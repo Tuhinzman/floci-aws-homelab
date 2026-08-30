@@ -58,6 +58,7 @@ for attempt in $(seq 1 10); do
     break
   fi
 
+  echo "attempt=${attempt} message=not-yet-visible"
   sleep 1
 done
 
