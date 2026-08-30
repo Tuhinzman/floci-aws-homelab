@@ -1,6 +1,6 @@
 # Architecture
 
-This lab runs Floci inside a dedicated Ubuntu virtual machine on Proxmox rather than installing Docker directly on the Proxmox host.
+This lab runs Floci inside a dedicated Ubuntu virtual machine on Proxmox. Docker is kept inside the VM rather than installed on the Proxmox host.
 
 ```text
 Bare-metal server
@@ -8,136 +8,132 @@ Bare-metal server
     └── Ubuntu 24.04 VM
         ├── Docker Engine
         │   ├── Floci 1.7.0
-        │   │   ├── persistent Floci volume
+        │   │   ├── persistent data volume
         │   │   ├── AWS-compatible API on TCP 4566
-        │   │   └── Docker socket for container-backed services
-        │   └── Lambda runtime container
-        │       ├── public.ecr.aws/lambda/python:3.13
+        │   │   └── SQS event-source mappings
+        │   └── Python 3.13 Lambda runtime containers
         │       └── floci_default network
         └── AWS CLI v2
-            └── floci profile + aws-floci wrapper
+            └── isolated floci profile and aws-floci wrapper
 ```
 
-## Why a VM instead of the Proxmox host?
+## Why use a VM?
 
-Keeping Docker and Floci inside a VM gives the lab its own failure boundary. A broken container, package update, or experimental service does not modify the Proxmox host itself.
+The VM provides a separate failure boundary. Package changes, Docker experiments, and service failures stay away from the Proxmox host. The environment can also be resized, rebuilt, or removed independently.
 
-It also makes the environment easier to rebuild, resize, snapshot when appropriate, or remove later.
-
-## Starting VM size
-
-The validated lab started with:
+The validated VM started with:
 
 - 6 vCPU
 - 16 GiB RAM
 - 80 GiB virtual disk
 - Ubuntu 24.04 LTS
 
-This is not a minimum requirement. Lightweight services can run with less. Heavier services such as local Kubernetes, Kafka, OpenSearch, databases, or multiple Lambda workloads can require more memory and disk.
+This is a practical starting point, not a minimum requirement.
 
 ## Network model
 
-Floci exposes its main AWS-compatible API on TCP port `4566`.
-
-The public repository does not hard-code the author's private LAN address. Set `FLOCI_HOST_IP` in `.env` to the address assigned to your VM.
+The VM shell and workstation reach Floci through the private VM address:
 
 ```text
-Workstation or VM shell
-        |
-        | http://<FLOCI_HOST_IP>:4566
-        v
-      Floci
-        ^
-        | http://floci:4566
-        |
-Lambda runtime container
+http://<FLOCI_HOST_IP>:4566
 ```
 
-Two names are used intentionally:
+Lambda runtime containers reach Floci through the Compose network:
 
-- `FLOCI_HOST_IP` is reachable from the workstation and VM shell.
-- `FLOCI_INTERNAL_HOSTNAME=floci` is resolvable by containers attached to the Compose network.
+```text
+http://floci:4566
+```
 
-The Lambda smoke test verified that the spawned Python 3.13 runtime container joined `floci_default`. This allows the runtime to communicate with Floci without depending on the VM's LAN route.
+The `.env` file therefore contains two related settings:
 
-For a home lab, a DHCP reservation is usually preferable to manually placing an arbitrary static address inside the guest. It keeps the address stable while allowing the router to remain the source of truth for the subnet and gateway.
+```text
+FLOCI_HOST_IP=<private VM address>
+FLOCI_INTERNAL_HOSTNAME=floci
+```
+
+The Lambda tests confirmed that the runtime containers joined `floci_default`. This allows a function to call local services such as DynamoDB through Docker DNS.
+
+Because Floci uses the internal hostname when it returns absolute service URLs, SQS queue URLs use this form:
+
+```text
+http://floci:4566/000000000000/<queue-name>
+```
+
+A DHCP reservation is recommended so the VM address stays stable.
 
 ## Storage model
 
-The lab uses Floci `hybrid` storage with a Docker volume mounted at `/app/data`.
+Floci uses hybrid storage with a Docker volume mounted at `/app/data`:
 
 ```text
 Floci container
-    |
-    +-- /app/data
-          |
-          +-- Docker volume: floci_floci-data
+└── /app/data
+    └── floci_floci-data
 ```
 
 The tested S3, SQS, DynamoDB, SSM Parameter Store, and Secrets Manager resources survived a Floci container restart.
 
-The Docker socket is mounted into Floci because some emulated services create additional local containers. The validated Lambda workflow used that socket to start a real AWS Lambda Python 3.13 runtime image. Treat Docker-socket access as privileged access to the VM.
+The Docker socket is mounted into Floci so container-backed services can start local runtimes. The Lambda tests used that socket to run the Python 3.13 Lambda image. Docker-socket access should be treated as privileged access to the VM.
 
-Lambda images and runtime containers use Docker's own storage in addition to the Floci data volume. Monitor both the guest filesystem and the hypervisor's physical storage pool.
-
-## AWS CLI isolation
-
-The lab does not use real AWS access keys.
-
-```text
-AWS profile: floci
-Access key:  test
-Secret key:  test
-Endpoint:    http://<FLOCI_HOST_IP>:4566
-```
-
-The `aws-floci` wrapper always supplies the Floci endpoint and disables EC2 metadata lookup. This reduces the chance of accidentally sending a learning command to a real AWS account.
-
-## Validated Lambda execution path
+## Validated synchronous Lambda path
 
 ```text
 Python source
-    ↓
-ZIP package
-    ↓
-Floci Lambda API
-    ↓
-IAM execution-role reference
-    ↓
-Docker socket
-    ↓
-public.ecr.aws/lambda/python:3.13
-    ↓
-Synchronous invocation
-    ↓
-JSON response read-back and assertion
+→ ZIP package
+→ Lambda API
+→ execution-role reference
+→ Docker-backed Python 3.13 runtime
+→ synchronous invocation
+→ response assertion
 ```
 
-The test also inspected the underlying Docker container and confirmed:
+The validation confirmed the expected runtime image, a running container, attachment to `floci_default`, and exact request and response values.
 
-- the expected Lambda runtime image
-- a running container state
-- attachment to `floci_default`
-- function configuration read-back through the Lambda API
+## Validated event-driven path
 
-## Validation boundary
+```text
+SQS message
+→ enabled event-source mapping
+→ Lambda: floci-orders-processor
+→ Docker-backed Python execution
+→ DynamoDB PutItem
+→ exact item read-back
+```
 
-The following workflows have been executed successfully:
+The function writes the following fields:
+
+- `order_id`
+- `status`
+- `source`
+- `message_id`
+- `processed_by`
+
+The test asserted every field. It did not merely check that the table contained an item.
+
+## Verified boundary
+
+The repository currently verifies:
 
 - STS identity lookup
-- S3 create, upload, list, and read
+- S3 create, write, list, and read
 - SQS create, send, and receive
 - DynamoDB create, write, and read
 - SSM parameter create and read
 - Secrets Manager secret create and read
-- persistence of all of the above across a Floci restart
-- IAM role creation and read-back for Lambda
-- Python 3.13 Lambda package and function creation
-- synchronous Lambda invocation
-- input-event and response assertion
-- real Docker runtime-container verification
-- Lambda runtime attachment to the Floci Compose network
+- core-service persistence across a Floci restart
+- Python 3.13 Lambda creation and synchronous invocation
+- Docker-backed Lambda execution
+- SQS event-source mapping creation and `Enabled` state
+- asynchronous SQS-triggered Lambda execution
+- Lambda-to-DynamoDB write and exact read-back
 
-The current evidence does not prove Lambda persistence across restart, SQS event-source mappings, concurrency, layers, VPC integration, or exact AWS IAM enforcement.
+It does not yet verify:
 
-Other services may appear as running in Floci's health endpoint, but they are not considered validated in this repository until an end-to-end workflow has been executed and documented.
+- persistence of the Lambda function or event-source mapping after a Floci restart
+- processing after a full VM reboot
+- retry or dead-letter queue behavior
+- partial batch failure handling
+- exactly-once delivery
+- production scaling, availability, or AWS IAM parity
+
+A separate script is included to test the complete event-driven path after restarting Floci. That result should only be added to the verified boundary after the script passes on the lab.
