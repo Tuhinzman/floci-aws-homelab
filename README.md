@@ -93,47 +93,61 @@ Ubuntu 24.04 LTS
 
 You can start smaller if you only plan to use lightweight services. Container-backed services such as databases, Kubernetes, Kafka, or OpenSearch will need more resources.
 
-### 2. Install Docker
+### 2. Clone the repository
+
+```bash
+git clone https://github.com/Tuhinzman/floci-aws-homelab.git
+cd floci-aws-homelab
+```
+
+### 3. Install Docker
 
 ```bash
 sudo bash scripts/install-docker.sh
 ```
 
-### 3. Configure Floci
+### 4. Configure and start Floci
 
-Copy the example environment file and set the IP address of the VM:
+Copy the example environment file and set the private IP address of the VM:
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Then start Floci:
+Start Floci:
 
 ```bash
 sudo docker compose --env-file .env -f compose/compose.yaml pull
 sudo docker compose --env-file .env -f compose/compose.yaml up -d
 ```
 
-Check health:
+Load the environment into the current shell and check health:
 
 ```bash
+set -a
+. ./.env
+set +a
 curl -fsS "http://${FLOCI_HOST_IP}:4566/_localstack/health"
 ```
 
-### 4. Install AWS CLI v2
+### 5. Install AWS CLI v2
 
 ```bash
 sudo bash scripts/install-aws-cli.sh
 ```
 
-### 5. Create the isolated Floci CLI profile
+### 6. Create the isolated Floci CLI profile
+
+Run this as your normal Linux user, not with `sudo`:
 
 ```bash
 bash scripts/configure-floci-cli.sh
 ```
 
-Then verify that the CLI is talking to the local emulator:
+The script reads `.env`, preserves any existing AWS profiles, adds the isolated `floci` profile, and installs the `aws-floci` helper.
+
+Verify that the CLI is talking to the local emulator:
 
 ```bash
 aws-floci sts get-caller-identity
@@ -145,13 +159,13 @@ The default Floci account should report:
 000000000000
 ```
 
-### 6. Run the core service smoke test
+### 7. Run the core service smoke test
 
 ```bash
 bash scripts/smoke-test-core-services.sh
 ```
 
-### 7. Validate persistence
+### 8. Validate persistence
 
 ```bash
 bash scripts/validate-persistence.sh
