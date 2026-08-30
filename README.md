@@ -1,5 +1,7 @@
 # Floci AWS Homelab
 
+[![Repository validation](https://github.com/Tuhinzman/floci-aws-homelab/actions/workflows/validate.yml/badge.svg)](https://github.com/Tuhinzman/floci-aws-homelab/actions/workflows/validate.yml)
+
 A hands-on local AWS learning lab for junior Cloud DevOps and Platform Engineers who want to practice AWS-style workflows without keeping billable AWS infrastructure running.
 
 ## Why this project exists
@@ -33,7 +35,7 @@ The following AWS-style workflows have been verified end to end:
 | SSM Parameter Store | put and read parameter |
 | Secrets Manager | create and read secret |
 
-The same resources were verified again after restarting the Floci container, proving persistence for the tested services.
+The same resources were verified again after restarting the Floci container, proving persistence for the tested services. The sanitized [v0.1 baseline validation record](docs/validation/v0.1-baseline.md) captures the environment, executed checks, repository adoption, and claim boundary.
 
 > **Important:** A service appearing in Floci's health output does not mean every AWS feature of that service has been validated. This repository clearly separates what is supported by Floci from what has actually been tested here.
 
@@ -66,7 +68,9 @@ The AWS CLI is intentionally configured with dummy credentials and a dedicated w
 ├── docs/
 │   ├── architecture.md
 │   ├── runbook.md
-│   └── troubleshooting.md
+│   ├── troubleshooting.md
+│   └── validation/
+│       └── v0.1-baseline.md
 ├── scripts/
 │   ├── configure-floci-cli.sh
 │   ├── install-aws-cli.sh
