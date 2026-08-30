@@ -1,0 +1,24 @@
+services:
+  floci:
+    image: floci/floci:${FLOCI_VERSION:-1.7.0}
+    container_name: floci
+    restart: unless-stopped
+
+    ports:
+      - "${FLOCI_HOST_IP}:4566:4566"
+
+    volumes:
+      - floci-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    environment:
+      FLOCI_BASE_URL: "http://${FLOCI_HOST_IP}:4566"
+      FLOCI_DEFAULT_REGION: "${FLOCI_REGION:-us-east-1}"
+      FLOCI_STORAGE_MODE: "hybrid"
+      FLOCI_STORAGE_PERSISTENT_PATH: "/app/data"
+      FLOCI_DOCKER_RESOURCE_NAMESPACE: "aws-lab"
+      FLOCI_DOCKER_LOG_MAX_SIZE: "10m"
+      FLOCI_DOCKER_LOG_MAX_FILE: "3"
+
+volumes:
+  floci-data:
