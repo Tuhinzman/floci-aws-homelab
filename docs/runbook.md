@@ -9,10 +9,10 @@ The commands are intentionally simple. The goal is to make the lab easy to rebui
 You need:
 
 - a Linux VM, preferably Ubuntu 24.04 LTS
-- Docker Engine and Docker Compose
 - enough CPU, RAM, and disk for the services you plan to emulate
 - a stable private IP for the VM
-- AWS CLI v2
+- Internet access for package and image downloads
+- Git
 
 A practical starting VM size is 6 vCPU, 16 GiB RAM, and an 80 GiB disk. You can use less for basic S3, SQS, DynamoDB, SSM, and Secrets Manager practice.
 
@@ -23,7 +23,7 @@ If the VM is hosted on thin-provisioned storage, check the physical storage pool
 Create an Ubuntu VM in your hypervisor and make sure it can:
 
 - resolve DNS
-- reach the Internet for package and image downloads
+- reach the Internet
 - accept SSH connections from your workstation
 - run the QEMU guest agent if you use Proxmox
 
@@ -42,9 +42,16 @@ systemctl is-active fstrim.timer
 systemctl is-enabled fstrim.timer
 ```
 
-## 3. Install Docker
+## 3. Clone the repository
 
-From the repository root:
+```bash
+git clone https://github.com/Tuhinzman/floci-aws-homelab.git
+cd floci-aws-homelab
+```
+
+Run the remaining repository commands from this directory unless a section says otherwise.
+
+## 4. Install Docker
 
 ```bash
 sudo bash scripts/install-docker.sh
@@ -60,7 +67,7 @@ sudo docker run --rm hello-world
 
 The Docker socket gives root-equivalent control over this VM. Do not expose it over the network, and do not assume membership in the `docker` group is harmless.
 
-## 4. Configure Floci
+## 5. Configure Floci
 
 Copy the example environment file:
 
@@ -91,7 +98,7 @@ Check container state:
 sudo docker compose --env-file .env -f compose/compose.yaml ps
 ```
 
-Check the health endpoint using the VM address configured in `.env`:
+Load the environment and check health:
 
 ```bash
 set -a
@@ -107,9 +114,7 @@ sudo docker inspect floci \
   --format 'Status={{.State.Status}} Health={{.State.Health.Status}}'
 ```
 
-## 5. Install AWS CLI v2
-
-Run:
+## 6. Install AWS CLI v2
 
 ```bash
 sudo bash scripts/install-aws-cli.sh
@@ -124,20 +129,15 @@ command -v aws
 
 The installer needs `unzip`. The repository script installs it before running the official AWS CLI installer.
 
-## 6. Configure an isolated Floci AWS profile
+## 7. Configure an isolated Floci AWS profile
 
-Do this as your normal Linux user, not inside `sudo bash`. The profile belongs in that user's home directory.
-
-Load the lab address and create the profile:
+Run this as your normal Linux user, not inside `sudo bash`:
 
 ```bash
-set -a
-. ./.env
-set +a
 bash scripts/configure-floci-cli.sh
 ```
 
-This creates a dedicated `floci` profile with dummy credentials and installs the `aws-floci` helper command.
+The script reads the repository `.env`, preserves existing AWS profiles, adds a dedicated `floci` profile with dummy credentials, and installs the `aws-floci` helper command.
 
 Verify:
 
@@ -153,9 +153,7 @@ The default Floci account should be:
 
 Use `aws-floci` for local lab commands instead of typing the endpoint manually every time.
 
-## 7. Validate the core services
-
-Run:
+## 8. Validate the core services
 
 ```bash
 bash scripts/smoke-test-core-services.sh
@@ -178,12 +176,11 @@ FLOCI_CORE_AWS_SMOKE_TEST=PASS
 
 These resources are deliberately left in place so the persistence test can verify them after a restart.
 
-## 8. Validate persistence
+## 9. Validate persistence
 
-The persistence check expects the Floci Compose project to be available under `/opt/floci` by default. If yours is somewhere else, set `FLOCI_DIR` first.
+Run the persistence test from any directory. It resolves the repository path from the script location and reads the same `.env` and Compose file used during deployment.
 
 ```bash
-export FLOCI_DIR=/opt/floci
 bash scripts/validate-persistence.sh
 ```
 
@@ -200,52 +197,52 @@ SECRETS_MANAGER_PERSISTENCE=PASS
 FLOCI_PERSISTENCE_VALIDATION=PASS
 ```
 
-## 9. Normal operations
+## 10. Normal operations
+
+Run these commands from the repository root.
 
 ### Check status
 
 ```bash
-cd /opt/floci
-sudo docker compose ps
+sudo docker compose --env-file .env -f compose/compose.yaml ps
 ```
 
 ### Check health
 
 ```bash
+set -a
+. ./.env
+set +a
 curl -fsS "http://${FLOCI_HOST_IP}:4566/_localstack/health"
 ```
 
 ### View logs
 
 ```bash
-cd /opt/floci
-sudo docker compose logs --tail=100 floci
+sudo docker compose --env-file .env -f compose/compose.yaml logs --tail=100 floci
 ```
 
 ### Restart Floci
 
 ```bash
-cd /opt/floci
-sudo docker compose restart floci
+sudo docker compose --env-file .env -f compose/compose.yaml restart floci
 ```
 
 ### Stop the lab
 
 ```bash
-cd /opt/floci
-sudo docker compose stop
+sudo docker compose --env-file .env -f compose/compose.yaml stop
 ```
 
 ### Start it again
 
 ```bash
-cd /opt/floci
-sudo docker compose start
+sudo docker compose --env-file .env -f compose/compose.yaml start
 ```
 
 Do not use `docker compose down -v` unless you intentionally want to remove the persistent volume and its data.
 
-## 10. Storage checks
+## 11. Storage checks
 
 Floci itself is small, but container-backed services can consume disk quickly.
 
@@ -259,23 +256,24 @@ sudo docker volume ls
 
 On a Proxmox host using LVM-thin, also watch the thin-pool data percentage. Logical VM disk sizes can exceed the physical pool because of thin provisioning, but the pool must never be allowed to fill physically.
 
-## 11. Network stability
+## 12. Network stability
 
 The Floci address is included in returned service URLs, such as SQS queue URLs. That means the VM address should stay stable.
 
-For a home lab, consider reserving the VM's address in your router or DHCP server rather than guessing an unused static IP in the guest.
+For a home lab, reserve the VM address in your router or DHCP server rather than guessing an unused static IP in the guest.
 
 If the address changes:
 
 1. update `.env`
-2. update the `aws-floci` wrapper by re-running `scripts/configure-floci-cli.sh`
-3. recreate the Floci container with the new Compose configuration
+2. re-run `scripts/configure-floci-cli.sh`
+3. recreate the Floci container with `docker compose up -d`
+4. repeat the smoke and persistence tests
 
-## 12. Adding more AWS services
+## 13. Adding more AWS services
 
 Floci exposes many AWS-compatible service APIs, but do not assume a service is fully validated because it appears as `running` in the health response.
 
-Add services one workflow at a time. A useful pattern is:
+Add services one workflow at a time:
 
 ```text
 create resource
@@ -288,7 +286,7 @@ create resource
 
 Container-backed services such as Lambda, databases, Kubernetes, Kafka, or OpenSearch may create additional Docker containers and need more ports, memory, and storage than the core services tested here.
 
-## 13. Security notes
+## 14. Security notes
 
 This is a learning lab, not a public cloud endpoint.
 
@@ -301,7 +299,7 @@ Keep these rules:
 - keep `.env` out of Git
 - sanitize private IPs, MAC addresses, SSH keys, machine IDs, and real secrets before publishing evidence
 
-## 14. Validation boundary
+## 15. Validation boundary
 
 This runbook proves the workflows documented in this repository. It does not prove exact parity with AWS for IAM enforcement, VPC networking, managed EKS, availability, scaling, quotas, Multi-AZ behavior, pricing, or unsupported API operations.
 
