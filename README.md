@@ -22,7 +22,8 @@ The current lab has been built and tested with:
 - Docker Engine and Docker Compose
 - Floci 1.7.0
 - AWS CLI v2 with an isolated `floci` profile
-- Persistent Floci state using hybrid storage
+- persistent Floci state using hybrid storage
+- Docker-backed Lambda execution using the Python 3.13 runtime image
 
 The following AWS-style workflows have been verified end to end:
 
@@ -34,10 +35,17 @@ The following AWS-style workflows have been verified end to end:
 | DynamoDB | create table, put item, get item |
 | SSM Parameter Store | put and read parameter |
 | Secrets Manager | create and read secret |
+| IAM | create and read back a Lambda execution role |
+| Lambda | package Python code, create function, invoke synchronously, assert the response, and verify the real Docker runtime container and network |
 
-The same resources were verified again after restarting the Floci container, proving persistence for the tested services. The sanitized [v0.1 baseline validation record](docs/validation/v0.1-baseline.md) captures the environment, executed checks, repository adoption, and claim boundary.
+The S3, SQS, DynamoDB, SSM, and Secrets Manager resources were verified again after restarting the Floci container. The Lambda workflow was then validated through a real `public.ecr.aws/lambda/python:3.13` runtime container attached to the Floci Docker network.
 
-> **Important:** A service appearing in Floci's health output does not mean every AWS feature of that service has been validated. This repository clearly separates what is supported by Floci from what has actually been tested here.
+Validation records:
+
+- [v0.1 core-service baseline](docs/validation/v0.1-baseline.md)
+- [v0.2 Docker-backed Lambda validation](docs/validation/v0.2-lambda.md)
+
+> **Important:** A service appearing in Floci's health output does not mean every AWS feature of that service has been validated. This repository clearly separates what Floci exposes from what has actually been tested here.
 
 ## Architecture
 
@@ -46,23 +54,26 @@ Bare-metal server
 └── Proxmox VE
     └── Ubuntu VM
         ├── Docker Engine
-        │   └── Floci
-        │       ├── S3
-        │       ├── SQS
-        │       ├── DynamoDB
-        │       ├── SSM Parameter Store
-        │       ├── Secrets Manager
-        │       └── other Floci-supported services
+        │   ├── Floci
+        │   │   ├── core AWS-compatible APIs
+        │   │   ├── persistent Floci volume
+        │   │   └── Docker socket
+        │   └── Lambda runtime container
+        │       ├── public.ecr.aws/lambda/python:3.13
+        │       └── floci_default network
         └── AWS CLI v2
-            └── isolated `floci` profile
+            └── isolated `floci` profile + `aws-floci` wrapper
 ```
 
-The AWS CLI is intentionally configured with dummy credentials and a dedicated wrapper so lab commands are sent to Floci instead of real AWS.
+The AWS CLI uses dummy credentials and a dedicated wrapper so lab commands are sent to Floci instead of real AWS. Docker-backed services can reach Floci through the internal hostname configured in `.env`.
 
 ## Repository layout
 
 ```text
 .
+├── .github/
+│   └── workflows/
+│       └── validate.yml
 ├── compose/
 │   └── compose.yaml
 ├── docs/
@@ -70,12 +81,14 @@ The AWS CLI is intentionally configured with dummy credentials and a dedicated w
 │   ├── runbook.md
 │   ├── troubleshooting.md
 │   └── validation/
-│       └── v0.1-baseline.md
+│       ├── v0.1-baseline.md
+│       └── v0.2-lambda.md
 ├── scripts/
 │   ├── configure-floci-cli.sh
 │   ├── install-aws-cli.sh
 │   ├── install-docker.sh
 │   ├── smoke-test-core-services.sh
+│   ├── smoke-test-lambda.sh
 │   └── validate-persistence.sh
 ├── .env.example
 ├── .gitignore
@@ -86,7 +99,7 @@ The AWS CLI is intentionally configured with dummy credentials and a dedicated w
 
 ### 1. Prepare an Ubuntu VM
 
-A practical starting size for a learning lab is:
+A practical starting size for this learning lab is:
 
 ```text
 6 vCPU
@@ -95,7 +108,7 @@ A practical starting size for a learning lab is:
 Ubuntu 24.04 LTS
 ```
 
-You can start smaller if you only plan to use lightweight services. Container-backed services such as databases, Kubernetes, Kafka, or OpenSearch will need more resources.
+You can start smaller for lightweight services. Container-backed services such as Lambda, databases, Kubernetes, Kafka, or OpenSearch need additional memory and disk.
 
 ### 2. Clone the repository
 
@@ -149,7 +162,7 @@ Run this as your normal Linux user, not with `sudo`:
 bash scripts/configure-floci-cli.sh
 ```
 
-The script reads `.env`, preserves any existing AWS profiles, adds the isolated `floci` profile, and installs the `aws-floci` helper.
+The script reads `.env`, preserves existing AWS profiles, adds the isolated `floci` profile, and installs the `aws-floci` helper.
 
 Verify that the CLI is talking to the local emulator:
 
@@ -169,11 +182,19 @@ The default Floci account should report:
 bash scripts/smoke-test-core-services.sh
 ```
 
-### 8. Validate persistence
+### 8. Validate core-service persistence
 
 ```bash
 bash scripts/validate-persistence.sh
 ```
+
+### 9. Validate Docker-backed Lambda
+
+```bash
+bash scripts/smoke-test-lambda.sh
+```
+
+The first run may pull the Python 3.13 Lambda runtime image. A successful test verifies the IAM role, function creation, synchronous invocation, response content, runtime container, and Docker network attachment.
 
 ## Safety model
 
@@ -183,6 +204,7 @@ This lab intentionally uses:
 - a dedicated AWS profile named `floci`
 - an `aws-floci` wrapper that always supplies the local endpoint
 - a configurable private VM address instead of a hard-coded public endpoint
+- an internal Docker hostname for spawned service containers
 
 Do not put real AWS access keys in this repository or in the Floci profile.
 
@@ -194,7 +216,7 @@ Use it to practice:
 - infrastructure automation
 - event-driven service patterns
 - local application integration testing
-- Docker-based cloud service emulation
+- Docker-backed Lambda execution
 - troubleshooting and repeatable validation
 - learning before spending money on a real AWS environment
 
@@ -209,12 +231,13 @@ A passing Floci test does **not** automatically prove:
 - Multi-AZ behavior
 - production-grade EKS behavior
 - exact parity with every AWS API or feature
+- Lambda concurrency, layers, VPC integration, or event-source behavior unless separately tested
 
 Use real AWS for final validation when those behaviors matter.
 
 ## Documentation
 
-Start with the [runbook](docs/runbook.md) for the complete operator workflow. The [troubleshooting guide](docs/troubleshooting.md) captures real issues encountered while building this lab and how they were resolved.
+Start with the [runbook](docs/runbook.md) for the complete operator workflow. The [architecture guide](docs/architecture.md) explains the host, container, storage, and network boundaries. The [troubleshooting guide](docs/troubleshooting.md) captures real issues encountered while building this lab and how they were resolved.
 
 ## Project philosophy
 
