@@ -15,6 +15,7 @@ services:
 
     environment:
       FLOCI_BASE_URL: "http://${FLOCI_HOST_IP}:4566"
+      FLOCI_HOSTNAME: "floci"
       FLOCI_DEFAULT_REGION: "${FLOCI_REGION:-us-east-1}"
       FLOCI_STORAGE_MODE: "hybrid"
       FLOCI_STORAGE_PERSISTENT_PATH: "/app/data"
