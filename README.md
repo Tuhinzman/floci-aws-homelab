@@ -37,14 +37,16 @@ The following AWS-style workflows have been verified end to end:
 | Secrets Manager | create and read secret |
 | Lambda | package, create, invoke, assert response, inspect runtime container |
 | SQS → Lambda → DynamoDB | create mapping, send message, execute Lambda asynchronously, assert DynamoDB side effect |
+| Event-chain persistence | restart Floci, read back the same queue, table, function, and mapping, then process a new message successfully |
 
-The core S3, SQS, DynamoDB, SSM, and Secrets Manager resources were verified again after restarting the Floci container.
+The core resources and the complete tested event-driven chain were verified after restarting the Floci container. The event-source mapping retained the same UUID and remained enabled, and a new SQS message produced a new asserted DynamoDB item after restart.
 
 Validation records:
 
 - [v0.1 core-service and persistence baseline](docs/validation/v0.1-baseline.md)
 - [v0.2 Docker-backed Lambda validation](docs/validation/v0.2-lambda.md)
 - [v0.3 SQS to Lambda to DynamoDB validation](docs/validation/v0.3-sqs-lambda-dynamodb.md)
+- [v0.4 event-driven restart persistence validation](docs/validation/v0.4-event-driven-persistence.md)
 
 > **Important:** A service appearing in Floci's health output does not mean every AWS feature of that service has been validated. This repository separates what Floci reports as available from what was actually exercised and asserted here.
 
@@ -58,7 +60,7 @@ Bare-metal server
         │   ├── Floci
         │   │   ├── persistent service state
         │   │   ├── S3, SQS, DynamoDB, SSM, Secrets Manager
-        │   │   └── Lambda event-source mapping
+        │   │   └── persistent Lambda event-source mapping
         │   └── Docker-backed Lambda runtime containers
         │       └── Python 3.13 on floci_default
         └── AWS CLI v2
@@ -75,6 +77,8 @@ SQS message
 → exact item read-back
 ```
 
+The same path was executed successfully again after a Floci restart without recreating the function or mapping.
+
 ## Repository layout
 
 ```text
@@ -90,7 +94,8 @@ SQS message
 │   └── validation/
 │       ├── v0.1-baseline.md
 │       ├── v0.2-lambda.md
-│       └── v0.3-sqs-lambda-dynamodb.md
+│       ├── v0.3-sqs-lambda-dynamodb.md
+│       └── v0.4-event-driven-persistence.md
 ├── scripts/
 │   ├── configure-floci-cli.sh
 │   ├── install-aws-cli.sh
@@ -221,13 +226,13 @@ This sends a unique SQS message, waits for Lambda to process it, and asserts the
 
 ### 11. Test the event path after restarting Floci
 
-Run this only after the event-driven smoke test has created its resources:
+Run this after the event-driven smoke test has created its resources:
 
 ```bash
 bash scripts/validate-event-driven-persistence.sh
 ```
 
-The script is included and CI-checked. Its restart result remains outside the verified claim boundary until it passes on the lab.
+This verified that the same queue, table, Lambda function, event-source mapping UUID, and enabled mapping state survived the restart, and that a new message was processed afterward.
 
 ## Safety model
 
@@ -251,7 +256,7 @@ Use it to practice:
 - infrastructure automation
 - local application integration testing
 - Docker-backed Lambda execution
-- service persistence testing
+- service and integration persistence testing
 - troubleshooting and observable validation
 - learning before spending money on a real AWS environment
 
@@ -259,6 +264,7 @@ Use it to practice:
 
 A passing Floci test does **not** automatically prove:
 
+- persistence across a full VM or Proxmox host reboot
 - exact AWS IAM enforcement
 - real VPC and networking behavior
 - retries, dead-letter queues, or every event-source option
