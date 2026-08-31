@@ -1,10 +1,10 @@
 # Floci AWS Homelab Runbook
 
-This runbook explains how to build, operate, and validate the Floci AWS homelab. It is written for learners who want practical Cloud DevOps or Platform Engineering experience without leaving billable AWS resources running while they experiment.
+This runbook explains how to build and validate the lab from start to finish. It is written for someone who is still learning Cloud DevOps or Platform Engineering and wants to understand what each step is proving.
 
-The lab favors simple commands and observable checks. A service is only listed as verified after a real workflow has been executed and its result has been read back.
+The main rule is simple: do not call something successful only because a command exited with code `0`. Read the result back and verify it.
 
-## 1. Validated environment
+## 1. Lab environment
 
 The reference lab uses:
 
@@ -20,13 +20,11 @@ Terraform 1.16.0
 Python 3.13 Lambda runtime containers
 ```
 
-This is a practical starting size, not a minimum. Heavier services may need more memory and disk.
+This is a practical starting point, not a hard minimum.
 
-When Proxmox uses thin-provisioned storage, monitor the physical thin pool as well as the guest filesystem.
+## 2. Check the VM first
 
-## 2. Prepare the VM
-
-Confirm basic VM health:
+Before installing anything, make sure the VM is healthy:
 
 ```bash
 hostnamectl
@@ -37,7 +35,7 @@ systemctl is-active qemu-guest-agent
 systemctl is-active fstrim.timer
 ```
 
-The VM needs working DNS, Internet access for packages and images, and SSH access from your workstation.
+You want working DNS, Internet access, SSH access, the expected disk size, and enough free storage.
 
 ## 3. Clone the repository
 
@@ -46,7 +44,7 @@ git clone https://github.com/Tuhinzman/floci-aws-homelab.git
 cd floci-aws-homelab
 ```
 
-Run the remaining repository commands from this directory.
+Run the remaining commands from the repository root unless a section says otherwise.
 
 ## 4. Install Docker
 
@@ -54,7 +52,7 @@ Run the remaining repository commands from this directory.
 sudo bash scripts/install-docker.sh
 ```
 
-Verify:
+Check it:
 
 ```bash
 docker --version
@@ -62,7 +60,7 @@ sudo docker compose version
 sudo docker run --rm hello-world
 ```
 
-The Docker socket provides root-equivalent control over the VM. Do not expose it over the network.
+Floci uses the Docker socket to launch container-backed services such as Lambda. Treat that socket as privileged access to the VM.
 
 ## 5. Configure and start Floci
 
@@ -82,10 +80,10 @@ FLOCI_VERSION=1.7.0
 FLOCI_REGION=us-east-1
 ```
 
-The two addresses serve different contexts:
+The two addresses serve different purposes:
 
 - `FLOCI_HOST_IP` is used by the VM shell and workstation.
-- `FLOCI_INTERNAL_HOSTNAME=floci` is used by Lambda containers inside the Compose network.
+- `FLOCI_INTERNAL_HOSTNAME=floci` is used by Lambda containers inside the Docker network.
 
 Start Floci:
 
@@ -94,28 +92,43 @@ sudo docker compose --env-file .env -f compose/compose.yaml pull
 sudo docker compose --env-file .env -f compose/compose.yaml up -d
 ```
 
-Check status and health:
+Check status:
 
 ```bash
 sudo docker compose --env-file .env -f compose/compose.yaml ps
+```
 
+Check health:
+
+```bash
 set -a
 . ./.env
 set +a
 curl -fsS "http://${FLOCI_HOST_IP}:4566/_localstack/health"
+```
 
+Docker should also report the container as healthy:
+
+```bash
 sudo docker inspect floci \
   --format 'Status={{.State.Status}} Health={{.State.Health.Status}}'
 ```
 
 ## 6. Install and isolate AWS CLI
 
+Install AWS CLI v2:
+
 ```bash
 sudo bash scripts/install-aws-cli.sh
+```
+
+Create the local Floci profile as your normal Linux user:
+
+```bash
 bash scripts/configure-floci-cli.sh
 ```
 
-Run the profile script as your normal Linux user, not through `sudo bash`.
+Do not run the profile script through `sudo bash`. That changes `$HOME` and can make AWS CLI look for the profile under root instead of your user account.
 
 Verify:
 
@@ -123,17 +136,17 @@ Verify:
 aws-floci sts get-caller-identity
 ```
 
-Expected emulator account:
+Expected account:
 
 ```text
 000000000000
 ```
 
-The `floci` profile uses dummy credentials. Never place real AWS keys in it.
+The profile uses dummy credentials. Never put real AWS keys in it.
 
-## 7. Run the imperative validation sequence
+## 7. Validate the AWS-style services
 
-Run these tests in order because later tests reuse resources created earlier.
+Run the tests in order. Later tests reuse resources created by earlier ones.
 
 ### 7.1 Core services
 
@@ -141,17 +154,21 @@ Run these tests in order because later tests reuse resources created earlier.
 bash scripts/smoke-test-core-services.sh
 ```
 
+This checks STS, S3, SQS, DynamoDB, SSM Parameter Store, and Secrets Manager.
+
 Expected final line:
 
 ```text
 FLOCI_CORE_AWS_SMOKE_TEST=PASS
 ```
 
-### 7.2 Core-service persistence
+### 7.2 Core persistence
 
 ```bash
 bash scripts/validate-persistence.sh
 ```
+
+This restarts Floci and confirms that the previously created core resources can still be read.
 
 Expected final line:
 
@@ -165,7 +182,7 @@ FLOCI_PERSISTENCE_VALIDATION=PASS
 bash scripts/smoke-test-lambda.sh
 ```
 
-This packages and invokes a Python 3.13 function, asserts the response, and verifies the runtime container and `floci_default` network.
+This packages a Python 3.13 function, creates it through Floci, invokes it, checks the response, and verifies the real Lambda runtime container.
 
 Expected final line:
 
@@ -179,13 +196,13 @@ FLOCI_LAMBDA_SMOKE_TEST=PASS
 bash scripts/smoke-test-sqs-lambda-dynamodb.sh
 ```
 
-Validated path:
+This checks the complete path:
 
 ```text
 SQS message
-→ enabled event-source mapping
-→ Docker-backed Lambda execution
-→ DynamoDB PutItem
+→ event-source mapping
+→ Docker-backed Lambda
+→ DynamoDB write
 → exact item read-back
 ```
 
@@ -195,13 +212,13 @@ Expected final line:
 FLOCI_SQS_LAMBDA_DYNAMODB_TEST=PASS
 ```
 
-### 7.5 Complete event-chain persistence
+### 7.5 Event chain after a Floci restart
 
 ```bash
 bash scripts/validate-event-driven-persistence.sh
 ```
 
-This restarts Floci, verifies the same queue, table, function, and mapping, then sends a new message and asserts a new DynamoDB item.
+This restarts Floci, confirms that the queue, table, function, and mapping still exist, sends another message, and checks the new DynamoDB item.
 
 Expected final line:
 
@@ -211,7 +228,7 @@ FLOCI_EVENT_DRIVEN_PERSISTENCE_TEST=PASS
 
 ## 8. Terraform lifecycle
 
-Terraform uses separate resource names so it does not adopt or modify the manually validated reference stack.
+Terraform uses different resource names from the manual reference stack. This is important because the manual stack is used for persistence and reboot testing and must not be deleted by Terraform.
 
 ### 8.1 Install Terraform
 
@@ -220,30 +237,21 @@ sudo bash scripts/install-terraform.sh
 terraform version
 ```
 
-The validated version is Terraform `1.16.0`.
+Validated version:
 
-### 8.2 Initial plan, apply, and validation
+```text
+Terraform v1.16.0
+```
 
-On a clean Terraform state, run:
+### 8.2 Create and validate the Terraform stack
+
+On a clean Terraform state:
 
 ```bash
 bash scripts/terraform-apply-validate.sh
 ```
 
-The script:
-
-1. creates local ignored tfvars from `.env`
-2. runs format, init, and validate
-3. creates a saved plan
-4. asserts the exact six-resource create set
-5. applies the saved plan
-6. validates Terraform state
-7. runs a no-change plan
-8. sends an SQS message
-9. asserts the resulting DynamoDB item
-10. verifies the Docker-backed Lambda runtime
-
-Expected create plan:
+The expected create plan is:
 
 ```text
 6 to add
@@ -262,9 +270,11 @@ aws_lambda_function.orders
 aws_sqs_queue.orders
 ```
 
-### 8.3 Resume after a post-apply validation interruption
+The script applies the saved plan, checks Terraform state, runs a no-change plan, sends an SQS message, verifies the Lambda execution, and reads the DynamoDB item back.
 
-Do not rerun the initial six-create workflow when the saved plan already applied successfully.
+### 8.3 Resume validation if apply already succeeded
+
+If the saved create plan has already been applied, do not rerun the initial six-create path just to recheck it.
 
 Use:
 
@@ -272,7 +282,7 @@ Use:
 bash scripts/terraform-resume-validate.sh
 ```
 
-The reference lab has passed this path. It verified:
+The reference lab passed:
 
 ```text
 TERRAFORM_MANAGED_STATE_EXACT_MATCH=PASS
@@ -282,43 +292,41 @@ TERRAFORM_EVENT_DRIVEN_FUNCTIONAL_TEST=PASS
 FLOCI_TERRAFORM_RESUME_VALIDATION=PASS
 ```
 
-The expected data resources are:
+Terraform data resources are checked separately from managed infrastructure.
 
-```text
-data.archive_file.lambda
-data.aws_iam_policy_document.lambda_assume_role
-data.aws_iam_policy_document.lambda_permissions
-```
+### 8.4 Destroy and prove cleanup
 
-A data resource appearing in `terraform state list` is not an extra managed infrastructure resource.
-
-### 8.4 Destroy and cleanup verification
-
-The Terraform-managed resources remain present after successful apply and resume validation.
-
-Destroy is a separate, guarded lifecycle step:
+Run destroy only when you intentionally want to remove the Terraform-managed stack:
 
 ```bash
 bash scripts/terraform-destroy-verify.sh
 ```
 
-Run it only after reviewing the current state and explicitly deciding to remove the Terraform-managed stack.
+The reference lab completed this successfully.
 
-The destroy script is designed to verify:
+The destroy plan was exactly:
 
 ```text
-exact six-resource destroy plan
-→ apply saved destroy plan
-→ managed Terraform state empty
-→ SQS absent
-→ DynamoDB absent
-→ Lambda absent
-→ IAM role absent
-→ event-source mapping absent
-→ Terraform Lambda runtime container absent
+0 to add
+0 to change
+6 to destroy
 ```
 
-Do not use manual deletion, `terraform state rm`, or Floci volume removal as substitutes for the guarded destroy workflow.
+After applying the saved destroy plan, the following checks passed:
+
+```text
+TERRAFORM_MANAGED_STATE_EMPTY=PASS
+SQS_QUEUE_ABSENT=PASS
+DYNAMODB_TABLE_ABSENT=PASS
+LAMBDA_FUNCTION_ABSENT=PASS
+IAM_ROLE_ABSENT=PASS
+EVENT_SOURCE_MAPPING_ABSENT=PASS
+LAMBDA_RUNTIME_CONTAINER_ABSENT=PASS
+```
+
+Floci stayed healthy, and the manual reference stack was still present.
+
+This means the Terraform lifecycle is now proven from exact create plan to exact destroy and remote absence checks.
 
 ## 9. Normal operations
 
@@ -328,13 +336,13 @@ Check status:
 sudo docker compose --env-file .env -f compose/compose.yaml ps
 ```
 
-View logs:
+View recent logs:
 
 ```bash
 sudo docker compose --env-file .env -f compose/compose.yaml logs --tail=100 floci
 ```
 
-List Floci and spawned containers:
+List Floci and Lambda containers:
 
 ```bash
 sudo docker ps \
@@ -354,9 +362,11 @@ sudo docker compose --env-file .env -f compose/compose.yaml stop
 sudo docker compose --env-file .env -f compose/compose.yaml start
 ```
 
-Do not run `docker compose down -v` unless you intentionally want to delete the persistent Floci volume and its data.
+Do not use `docker compose down -v` unless you deliberately want to delete the persistent Floci volume and its data.
 
 ## 10. Storage checks
+
+Inside the VM:
 
 ```bash
 df -h /
@@ -364,82 +374,104 @@ sudo docker system df
 sudo docker volume ls
 ```
 
-Lambda images remain in Docker's image cache. Do not run broad pruning commands without checking what other workloads use them.
+On the Proxmox host, also watch the LVM-thin data percentage. A thin-provisioned virtual disk can look large even when the physical pool has much less free space.
 
-On the Proxmox host, monitor the LVM-thin data percentage and maintain physical headroom.
+## 11. Network notes
 
-## 11. Network stability
-
-Keep the VM address stable with a DHCP reservation where possible.
+Keep the VM address stable with a DHCP reservation if possible.
 
 ```text
 VM shell or workstation → http://<FLOCI_HOST_IP>:4566
 Lambda container        → http://floci:4566
 ```
 
-When the VM address changes:
+If the VM address changes:
 
 1. update `.env`
-2. re-run `scripts/configure-floci-cli.sh`
+2. run `scripts/configure-floci-cli.sh` again
 3. reconcile the Compose deployment
-4. repeat the relevant validations
+4. rerun the relevant validations
 
-## 12. Cleanup boundaries
+## 12. Common problems already encountered
 
-Imperative validation resources intentionally remain present for persistence and reboot tests.
+The build uncovered several useful troubleshooting cases:
 
-Terraform-managed resources must be removed through the Terraform destroy workflow, not through manual API deletion.
-
-Do not remove the Floci Docker volume when you intend to preserve lab state.
-
-## 13. Troubleshooting notes
-
-Common issues already encountered include:
-
-- SSH host-key warnings after IP reuse
-- AWS CLI installation failing because `unzip` was missing
-- `sudo bash` using root's home and losing the normal user's profile
-- a health check targeting `127.0.0.1` while the port was bound to the VM address
-- SQS URLs changing to `http://floci:4566` after the internal hostname was enabled
+- SSH host-key warning after an IP address was reused
+- AWS CLI installer failing because `unzip` was missing
+- `sudo bash` losing the normal user's AWS profile
+- a health check using `127.0.0.1` while port `4566` was bound to the VM address
+- SQS URLs changing to `http://floci:4566` after enabling the internal hostname
 - Terraform state validation accidentally counting data resources as managed resources
 - Proxmox thin-pool over-provisioning warnings
 
-See [troubleshooting.md](troubleshooting.md) for details.
+See [troubleshooting.md](troubleshooting.md) for the fixes.
 
-## 14. Security and validation boundary
+## 13. Security and public-repository rules
 
-Keep these rules:
+Keep these out of Git:
 
-- use dummy credentials only
-- do not expose TCP `4566` publicly
-- do not expose the Docker socket over the network
-- keep `.env`, tfvars, state, plans, and raw evidence out of Git
-- sanitize private addresses, SSH data, machine IDs, container IDs, mapping UUIDs, message IDs, and generated test identifiers
+- `.env`
+- Terraform state
+- local `terraform.tfvars`
+- saved Terraform plans
+- raw evidence logs
+- private IP addresses in evidence files
+- SSH keys
+- machine IDs
+- real secrets or AWS credentials
 
-The current verified boundary includes:
+The public repository should contain reusable configuration and sanitized validation records, not private lab state.
 
-- core AWS-style service workflows
-- core persistence across a Floci restart
-- synchronous Docker-backed Lambda
-- SQS to Lambda to DynamoDB integration
-- event-chain processing after a Floci restart
-- Terraform exact create plan
-- Terraform saved-plan apply
-- exact managed/data state validation
-- no-change convergence
-- Terraform-managed functional event processing
+## 14. Current validation boundary
 
-It does not yet include:
+Verified:
 
-- Terraform destroy and remote absence proof
-- persistence across a full Ubuntu VM or Proxmox host reboot
-- real AWS IAM enforcement
-- retry and dead-letter queue parity
-- exactly-once processing
-- production scaling, availability, quotas, or full AWS API parity
+```text
+Core AWS-style workflows
+Core persistence after Floci restart
+Docker-backed Lambda
+SQS → Lambda → DynamoDB
+Event-chain processing after Floci restart
+Terraform exact create plan
+Terraform saved-plan apply
+Terraform managed/data state validation
+Terraform no-change convergence
+Terraform functional event test
+Terraform exact destroy plan
+Terraform saved-plan destroy
+Terraform managed state empty
+Terraform API absence checks
+Terraform Lambda container cleanup
+Manual reference stack preserved
+```
+
+Not yet verified:
+
+```text
+Full Ubuntu VM reboot recovery
+Full Proxmox host reboot recovery
+Real AWS IAM behavior
+Retry and DLQ parity
+Exactly-once processing
+Production scaling and availability
+```
 
 ## 15. Next milestone
 
-The Terraform-managed stack is validated and still present. The next lifecycle step is guarded Terraform destroy, but it must not run until the owner explicitly authorizes removal.
+The next major test is a **full Ubuntu VM reboot**.
 
-After destroy and absence proof, the remaining major validation is a full Ubuntu VM reboot followed by a new message through the manually validated event chain.
+After the VM comes back, verify:
+
+```text
+Docker starts
+→ Floci becomes healthy
+→ manual SQS queue exists
+→ manual DynamoDB table exists
+→ manual Lambda function exists
+→ manual event-source mapping is enabled
+→ send a new SQS message
+→ Lambda runs
+→ new DynamoDB item is read back
+```
+
+That will close the remaining technical gate before the first stable portfolio release.
