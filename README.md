@@ -6,11 +6,11 @@ A hands-on local AWS learning lab for junior Cloud DevOps and Platform Engineers
 
 ## Why this project exists
 
-Learning AWS properly usually means creating resources, breaking things, rebuilding them, and repeating the process. That is useful, but it can also create real cloud costs while you are still learning.
+Learning AWS properly means creating resources, connecting services, breaking things, troubleshooting them, and repeating the process. That is useful, but it can also create real cloud costs while you are still learning.
 
 This repository documents a practical local environment built with **Proxmox, Ubuntu, Docker, Floci, AWS CLI, Lambda, SQS, DynamoDB, and Terraform**.
 
-The goal is to give learners a place to practice connected AWS-style workflows, troubleshoot them, manage them with Infrastructure as Code, and prove the results before moving AWS-specific validation to the real cloud.
+The goal is to give learners a place to practice connected AWS-style workflows, manage them with Infrastructure as Code, test persistence and recovery, and prove the results before moving AWS-specific validation to the real cloud.
 
 Floci is not treated as a complete replacement for AWS. It is a learning and integration-testing environment.
 
@@ -42,8 +42,9 @@ Verified workflows:
 | Event-chain persistence | restart Floci, read the same resources back, process another message |
 | Terraform create lifecycle | exact six-resource plan, saved-plan apply, state validation, no-change convergence, functional event test |
 | Terraform destroy lifecycle | exact six-resource destroy plan, saved-plan destroy, empty managed state, API absence proof, runtime cleanup |
+| Full Ubuntu VM reboot | Docker and Floci auto-start, same manual resources return, new message is processed after reboot |
 
-The manual event-driven reference stack survived a Floci restart and remained untouched by the Terraform create/destroy lifecycle.
+The manual event-driven reference stack survived both a Floci restart and a full Ubuntu VM reboot. It also remained untouched by the Terraform create/destroy lifecycle.
 
 ## Architecture
 
@@ -93,7 +94,8 @@ SQS message
 │       ├── v0.3-sqs-lambda-dynamodb.md
 │       ├── v0.4-event-driven-persistence.md
 │       ├── v0.5-terraform-apply-and-convergence.md
-│       └── v0.6-terraform-destroy-and-cleanup.md
+│       ├── v0.6-terraform-destroy-and-cleanup.md
+│       └── v0.7-full-vm-reboot.md
 ├── scripts/
 │   ├── configure-floci-cli.sh
 │   ├── install-aws-cli.sh
@@ -202,7 +204,7 @@ On a clean Terraform state:
 bash scripts/terraform-apply-validate.sh
 ```
 
-If apply already succeeded but the post-apply validation was interrupted, use:
+If apply already succeeded but post-apply validation was interrupted, use:
 
 ```bash
 bash scripts/terraform-resume-validate.sh
@@ -214,7 +216,7 @@ After the stack is fully validated and you intentionally want to remove it:
 bash scripts/terraform-destroy-verify.sh
 ```
 
-The reference lab has successfully completed all three paths, including API absence checks after destroy.
+The reference lab successfully completed all three paths, including API absence checks after destroy.
 
 ## Safety model
 
@@ -248,7 +250,8 @@ Use it to practice:
 
 This project does not automatically prove:
 
-- persistence across a full VM or Proxmox host reboot
+- recovery after a full Proxmox host reboot
+- recovery after abrupt power loss
 - exact AWS IAM enforcement
 - real VPC and networking behavior
 - retries, dead-letter queues, or every event-source option
@@ -267,4 +270,4 @@ Start with [Project Status and Goals](docs/project-status-and-goals.md), then us
 
 ## Current next step
 
-The Terraform lifecycle is complete. The remaining major validation before the first portfolio release is a **full Ubuntu VM reboot** followed by a new message through the preserved manual SQS → Lambda → DynamoDB stack.
+The main technical validation is complete. The next step is a final public-repository review: check privacy and safety, make sure the documentation is easy for a new learner to follow, confirm GitHub Actions is green, then create the first versioned portfolio release.
