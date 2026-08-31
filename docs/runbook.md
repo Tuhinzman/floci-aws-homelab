@@ -270,7 +270,7 @@ aws_lambda_function.orders
 aws_sqs_queue.orders
 ```
 
-The script applies the saved plan, checks Terraform state, runs a no-change plan, sends an SQS message, verifies the Lambda execution, and reads the DynamoDB item back.
+The script applies the saved plan, checks Terraform state, runs a no-change plan, sends an SQS message, verifies Lambda execution, and reads the DynamoDB item back.
 
 ### 8.3 Resume validation if apply already succeeded
 
@@ -312,7 +312,7 @@ The destroy plan was exactly:
 6 to destroy
 ```
 
-After applying the saved destroy plan, the following checks passed:
+After applying the saved destroy plan, these checks passed:
 
 ```text
 TERRAFORM_MANAGED_STATE_EMPTY=PASS
@@ -326,9 +326,73 @@ LAMBDA_RUNTIME_CONTAINER_ABSENT=PASS
 
 Floci stayed healthy, and the manual reference stack was still present.
 
-This means the Terraform lifecycle is now proven from exact create plan to exact destroy and remote absence checks.
+## 9. Validate recovery after a full Ubuntu VM reboot
 
-## 9. Normal operations
+A container restart is useful, but a VM reboot proves more. It checks that Docker starts with the operating system, Floci starts again, persistent resources return, and the event-driven workflow can process a new message without rebuilding the lab.
+
+Before rebooting, record a small baseline:
+
+- Docker is enabled and active
+- Floci is healthy
+- the manual queue exists
+- the DynamoDB table is `ACTIVE`
+- the Lambda function is `Active`
+- the event-source mapping is `Enabled`
+- save the queue identity and mapping UUID locally for comparison
+
+Then reboot the guest normally:
+
+```bash
+sudo reboot
+```
+
+After reconnecting, verify:
+
+```text
+Docker starts automatically
+Floci starts automatically and becomes healthy
+the same queue is present
+the same DynamoDB table is active
+the same Lambda function is active
+the same event-source mapping is enabled
+the mapping identity matches the pre-reboot baseline
+```
+
+Finally, send a new SQS message and check that:
+
+```text
+status       = created
+source       = sqs-lambda
+processed_by = floci-orders-processor
+message_id   = the exact ID returned by SQS
+```
+
+Also confirm that a Docker-backed Lambda runtime is running on `floci_default`.
+
+The reference lab passed this full workflow:
+
+```text
+DOCKER_ENABLED_AFTER_REBOOT=PASS
+DOCKER_ACTIVE_AFTER_REBOOT=PASS
+FLOCI_AUTO_START_AFTER_REBOOT=PASS
+FLOCI_HEALTH_AFTER_REBOOT=PASS
+QUEUE_IDENTITY_AFTER_REBOOT=PASS
+DYNAMODB_AFTER_REBOOT=PASS
+LAMBDA_AFTER_REBOOT=PASS
+MAPPING_UUID_AFTER_REBOOT=PASS
+MAPPING_STATE_AFTER_REBOOT=PASS
+DYNAMODB_STATUS_ASSERTION=PASS
+DYNAMODB_SOURCE_ASSERTION=PASS
+DYNAMODB_PROCESSOR_ASSERTION=PASS
+DYNAMODB_MESSAGE_ID_ASSERTION=PASS
+LAMBDA_CONTAINER_RUNNING=PASS
+LAMBDA_CONTAINER_NETWORK=PASS
+FLOCI_FULL_VM_REBOOT_VALIDATION=PASS
+```
+
+The first post-reboot functional check hit a parser error in the validation helper. The VM and application resources were left untouched. The check resumed in the same rebooted session using direct AWS CLI field queries, and the workflow passed. This is a useful troubleshooting example: separate a test-harness failure from an infrastructure failure before rebuilding anything.
+
+## 10. Normal operations
 
 Check status:
 
@@ -364,7 +428,7 @@ sudo docker compose --env-file .env -f compose/compose.yaml start
 
 Do not use `docker compose down -v` unless you deliberately want to delete the persistent Floci volume and its data.
 
-## 10. Storage checks
+## 11. Storage checks
 
 Inside the VM:
 
@@ -376,7 +440,7 @@ sudo docker volume ls
 
 On the Proxmox host, also watch the LVM-thin data percentage. A thin-provisioned virtual disk can look large even when the physical pool has much less free space.
 
-## 11. Network notes
+## 12. Network notes
 
 Keep the VM address stable with a DHCP reservation if possible.
 
@@ -392,7 +456,7 @@ If the VM address changes:
 3. reconcile the Compose deployment
 4. rerun the relevant validations
 
-## 12. Common problems already encountered
+## 13. Common problems already encountered
 
 The build uncovered several useful troubleshooting cases:
 
@@ -402,11 +466,12 @@ The build uncovered several useful troubleshooting cases:
 - a health check using `127.0.0.1` while port `4566` was bound to the VM address
 - SQS URLs changing to `http://floci:4566` after enabling the internal hostname
 - Terraform state validation accidentally counting data resources as managed resources
+- a post-reboot helper failing to parse command output even though the recovered infrastructure was healthy
 - Proxmox thin-pool over-provisioning warnings
 
-See [troubleshooting.md](troubleshooting.md) for the fixes.
+See [troubleshooting.md](troubleshooting.md) for the detailed fixes already documented.
 
-## 13. Security and public-repository rules
+## 14. Security and public-repository rules
 
 Keep these out of Git:
 
@@ -422,7 +487,7 @@ Keep these out of Git:
 
 The public repository should contain reusable configuration and sanitized validation records, not private lab state.
 
-## 14. Current validation boundary
+## 15. Current validation boundary
 
 Verified:
 
@@ -443,35 +508,28 @@ Terraform managed state empty
 Terraform API absence checks
 Terraform Lambda container cleanup
 Manual reference stack preserved
+Full Ubuntu VM reboot recovery
+New event processing after Ubuntu VM reboot
 ```
 
-Not yet verified:
+Not verified:
 
 ```text
-Full Ubuntu VM reboot recovery
 Full Proxmox host reboot recovery
+Abrupt power-loss recovery
 Real AWS IAM behavior
 Retry and DLQ parity
 Exactly-once processing
 Production scaling and availability
 ```
 
-## 15. Next milestone
+## 16. Before the first portfolio release
 
-The next major test is a **full Ubuntu VM reboot**.
+The main technical validation is complete. Before tagging the first release:
 
-After the VM comes back, verify:
-
-```text
-Docker starts
-→ Floci becomes healthy
-→ manual SQS queue exists
-→ manual DynamoDB table exists
-→ manual Lambda function exists
-→ manual event-source mapping is enabled
-→ send a new SQS message
-→ Lambda runs
-→ new DynamoDB item is read back
-```
-
-That will close the remaining technical gate before the first stable portfolio release.
+1. inspect the public repository for private or machine-specific data
+2. read the README and this runbook as if you were a new learner following them for the first time
+3. confirm GitHub Actions is green
+4. confirm local state, tfvars, plans, raw logs, and private configuration are still excluded from Git
+5. freeze the exact verified and unverified claims
+6. create the first versioned release
