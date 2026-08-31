@@ -8,15 +8,15 @@ A hands-on local AWS learning lab for junior Cloud DevOps and Platform Engineers
 
 Learning AWS properly usually means creating resources, breaking things, rebuilding them, and repeating the process. That is useful, but it can also create real cloud costs while you are still learning.
 
-This repository documents a working alternative for day-to-day practice: **Floci running in Docker on an Ubuntu VM hosted by Proxmox**.
+This repository documents a practical local environment built with **Proxmox, Ubuntu, Docker, Floci, AWS CLI, Lambda, SQS, DynamoDB, and Terraform**.
 
-The goal is to give learners a practical place to use AWS CLI, create and connect services, run Docker-backed Lambda functions, test event-driven systems, manage infrastructure with Terraform, troubleshoot failures, and build repeatable operational habits locally before final validation in real AWS.
+The goal is to give learners a place to practice connected AWS-style workflows, troubleshoot them, manage them with Infrastructure as Code, and prove the results before moving AWS-specific validation to the real cloud.
 
-This project does not claim that Floci is a complete replacement for AWS. Some behavior can only be proven in the real cloud. Instead, this lab reduces the cost of learning and experimentation while still providing meaningful hands-on experience.
+Floci is not treated as a complete replacement for AWS. It is a learning and integration-testing environment.
 
 ## What has been validated
 
-The current lab has been built and tested with:
+The reference lab uses:
 
 - Ubuntu 24.04 LTS on Proxmox/KVM
 - Docker Engine and Docker Compose
@@ -24,37 +24,26 @@ The current lab has been built and tested with:
 - AWS CLI v2 with an isolated `floci` profile
 - Terraform 1.16.0
 - AWS provider 6.61.0
-- persistent Floci state using hybrid storage
+- Archive provider 2.8.0
 - Docker-backed Python 3.13 Lambda runtimes
 
-The following AWS-style workflows have been verified end to end:
+Verified workflows:
 
 | Service or workflow | Validation performed |
 | --- | --- |
-| STS | `get-caller-identity` |
-| S3 | create bucket, upload object, list, read object |
-| SQS | create queue, send message, receive message |
+| STS | identity and account read-back |
+| S3 | create bucket, upload, list, read object |
+| SQS | create queue, send, receive message |
 | DynamoDB | create table, put item, get item |
 | SSM Parameter Store | put and read parameter |
 | Secrets Manager | create and read secret |
 | Lambda | package, create, invoke, assert response, inspect runtime container |
-| SQS → Lambda → DynamoDB | create mapping, send message, execute Lambda asynchronously, assert DynamoDB side effect |
-| Event-chain persistence | restart Floci, read back the same queue, table, function, and mapping, then process a new message successfully |
-| Terraform event stack | exact six-resource create plan, saved-plan apply, managed/data state validation, no-change convergence, SQS → Lambda → DynamoDB functional assertion |
+| SQS → Lambda → DynamoDB | create mapping, send message, run Lambda asynchronously, assert DynamoDB side effect |
+| Event-chain persistence | restart Floci, read the same resources back, process another message |
+| Terraform create lifecycle | exact six-resource plan, saved-plan apply, state validation, no-change convergence, functional event test |
+| Terraform destroy lifecycle | exact six-resource destroy plan, saved-plan destroy, empty managed state, API absence proof, runtime cleanup |
 
-The core resources and complete event-driven chain were verified after restarting Floci. The event-source mapping retained the same UUID and remained enabled, and a new SQS message produced a new asserted DynamoDB item after restart.
-
-Terraform also provisioned a separate event-driven stack. The live post-apply validation confirmed the exact managed and data state sets, a `No changes` convergence plan, an active Lambda function, an enabled mapping, Docker-backed processing, and an exact DynamoDB read-back. The Terraform-managed resources remain present until the guarded destroy step is explicitly authorized.
-
-Validation records:
-
-- [v0.1 core-service and persistence baseline](docs/validation/v0.1-baseline.md)
-- [v0.2 Docker-backed Lambda validation](docs/validation/v0.2-lambda.md)
-- [v0.3 SQS to Lambda to DynamoDB validation](docs/validation/v0.3-sqs-lambda-dynamodb.md)
-- [v0.4 event-driven restart persistence validation](docs/validation/v0.4-event-driven-persistence.md)
-- [v0.5 Terraform apply, convergence, and functional validation](docs/validation/v0.5-terraform-apply-and-convergence.md)
-
-> **Important:** A service appearing in Floci's health output does not mean every AWS feature of that service has been validated. This repository separates what Floci reports as available from what was actually exercised and asserted here.
+The manual event-driven reference stack survived a Floci restart and remained untouched by the Terraform create/destroy lifecycle.
 
 ## Architecture
 
@@ -66,7 +55,7 @@ Bare-metal server
         │   ├── Floci
         │   │   ├── persistent service state
         │   │   ├── S3, SQS, DynamoDB, SSM, Secrets Manager
-        │   │   └── persistent Lambda event-source mappings
+        │   │   └── Lambda event-source mappings
         │   └── Docker-backed Lambda runtime containers
         │       └── Python 3.13 on floci_default
         ├── AWS CLI v2
@@ -75,7 +64,7 @@ Bare-metal server
             └── separate IaC-managed event-driven stack
 ```
 
-The validated event path is:
+The main event path is:
 
 ```text
 SQS message
@@ -84,8 +73,6 @@ SQS message
 → DynamoDB PutItem
 → exact item read-back
 ```
-
-The same path was executed through both imperative validation scripts and Terraform-managed resources.
 
 ## Repository layout
 
@@ -105,7 +92,8 @@ The same path was executed through both imperative validation scripts and Terraf
 │       ├── v0.2-lambda.md
 │       ├── v0.3-sqs-lambda-dynamodb.md
 │       ├── v0.4-event-driven-persistence.md
-│       └── v0.5-terraform-apply-and-convergence.md
+│       ├── v0.5-terraform-apply-and-convergence.md
+│       └── v0.6-terraform-destroy-and-cleanup.md
 ├── scripts/
 │   ├── configure-floci-cli.sh
 │   ├── install-aws-cli.sh
@@ -130,7 +118,7 @@ The same path was executed through both imperative validation scripts and Terraf
 
 ### 1. Prepare an Ubuntu VM
 
-A practical starting size for this lab is:
+A practical starting size is:
 
 ```text
 6 vCPU
@@ -138,8 +126,6 @@ A practical starting size for this lab is:
 80 GiB disk
 Ubuntu 24.04 LTS
 ```
-
-Lightweight services can run with less. Databases, Kubernetes, Kafka, OpenSearch, or several simultaneous Lambda runtimes may require more resources.
 
 ### 2. Clone the repository
 
@@ -161,7 +147,7 @@ cp .env.example .env
 nano .env
 ```
 
-Set the private address of the VM. Keep the internal hostname as `floci` so Docker-spawned Lambda containers can resolve the emulator inside the Compose network.
+Example:
 
 ```text
 FLOCI_HOST_IP=192.168.1.50
@@ -175,15 +161,6 @@ Start Floci:
 ```bash
 sudo docker compose --env-file .env -f compose/compose.yaml pull
 sudo docker compose --env-file .env -f compose/compose.yaml up -d
-```
-
-Check health:
-
-```bash
-set -a
-. ./.env
-set +a
-curl -fsS "http://${FLOCI_HOST_IP}:4566/_localstack/health"
 ```
 
 ### 5. Install AWS CLI v2 and create the isolated profile
@@ -219,42 +196,39 @@ terraform version
 
 ### 8. Run the Terraform lifecycle
 
-A clean environment can begin with:
+On a clean Terraform state:
 
 ```bash
 bash scripts/terraform-apply-validate.sh
 ```
 
-When a saved plan has already applied but validation stopped after apply, use the resume path instead of rerunning the initial create workflow:
+If apply already succeeded but the post-apply validation was interrupted, use:
 
 ```bash
 bash scripts/terraform-resume-validate.sh
 ```
 
-The reference lab has passed the resume path through no-change convergence and functional event processing.
-
-The destroy workflow is intentionally separate:
+After the stack is fully validated and you intentionally want to remove it:
 
 ```bash
 bash scripts/terraform-destroy-verify.sh
 ```
 
-Run destroy only after reviewing the live state and explicitly deciding to remove the Terraform-managed stack.
+The reference lab has successfully completed all three paths, including API absence checks after destroy.
 
 ## Safety model
 
-This lab intentionally uses:
+This lab uses:
 
 - dummy AWS credentials
 - a dedicated AWS profile named `floci`
-- an `aws-floci` wrapper that always supplies the local endpoint
+- an `aws-floci` wrapper that always points to the local endpoint
 - a configurable private VM address
 - an internal Docker hostname for Lambda-to-Floci communication
-- a `.env` file excluded from Git
 - separate names for manual and Terraform-managed resources
-- local Terraform state and raw evidence excluded from the public repository
+- local Terraform state, tfvars, saved plans, and raw evidence excluded from Git
 
-Do not put real AWS access keys in this repository or in the Floci profile.
+Do not put real AWS access keys in the Floci profile or public repository.
 
 ## What this lab is good for
 
@@ -263,16 +237,16 @@ Use it to practice:
 - AWS CLI workflows
 - event-driven architecture
 - Infrastructure as Code
-- saved-plan apply and convergence validation
+- saved-plan apply and destroy
+- no-change convergence
 - local application integration testing
 - Docker-backed Lambda execution
-- service and integration persistence testing
+- persistence and recovery checks
 - troubleshooting and observable validation
-- learning before spending money on a real AWS environment
 
 ## What it does not prove
 
-A passing Floci test does **not** automatically prove:
+This project does not automatically prove:
 
 - persistence across a full VM or Proxmox host reboot
 - exact AWS IAM enforcement
@@ -282,17 +256,15 @@ A passing Floci test does **not** automatically prove:
 - production scaling or availability
 - AWS service quotas
 - Multi-AZ behavior
-- production-grade EKS behavior
-- exact parity with every AWS API or feature
+- managed EKS parity
+- full AWS API parity
 
-Use real AWS for final validation when those behaviors matter.
+Use real AWS when those behaviors matter.
 
 ## Documentation
 
-Start with the [project status and goals](docs/project-status-and-goals.md), then use the [runbook](docs/runbook.md) for the operator workflow. The [architecture document](docs/architecture.md) explains the VM, Docker, endpoint, persistence, Lambda networking, and Terraform model. The [troubleshooting guide](docs/troubleshooting.md) captures real issues encountered while building the lab.
+Start with [Project Status and Goals](docs/project-status-and-goals.md), then use the [Runbook](docs/runbook.md) for the operator workflow. The [Architecture](docs/architecture.md) document explains the VM, Docker, endpoint, persistence, Lambda networking, and Terraform model. The [Troubleshooting](docs/troubleshooting.md) guide records issues encountered during the build.
 
-## Project philosophy
+## Current next step
 
-The repository is intentionally practical. The focus is not on collecting configuration files for their own sake. Every verified claim comes from an executed workflow with an observable result and a read-back assertion.
-
-If you are new to Cloud DevOps, Platform Engineering, or AWS and want somewhere inexpensive to experiment freely, break things, rebuild them, and learn from the process, this project is for you.
+The Terraform lifecycle is complete. The remaining major validation before the first portfolio release is a **full Ubuntu VM reboot** followed by a new message through the preserved manual SQS → Lambda → DynamoDB stack.
